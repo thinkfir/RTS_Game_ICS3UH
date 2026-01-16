@@ -4,7 +4,7 @@
 // ---- Basic scene setup ----
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#0b101a');
+scene.background = new THREE.Color('#a9c8df');
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
 camera.position.set(0, 35, 45);
@@ -12,23 +12,25 @@ camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
 container.appendChild(renderer.domElement);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+const ambient = new THREE.AmbientLight(0xffffff, 1.0);
 scene.add(ambient);
-const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-dir.position.set(20, 30, 10);
+const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+dir.position.set(25, 35, 15);
 scene.add(dir);
 
-// Ground
-const groundGeo = new THREE.PlaneGeometry(120, 120, 1, 1);
-const groundMat = new THREE.MeshStandardMaterial({ color: '#2c3e50' });
+// Ground with mild variation
+const groundGeo = new THREE.PlaneGeometry(160, 160, 1, 1);
+const groundMat = new THREE.MeshStandardMaterial({ color: '#7da67d', roughness: 0.9, metalness: 0.0 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
 scene.add(ground);
 
 // ---- Game state ----
-const resources = { food: 200, wood: 200, gold: 150, pop: 4, popCap: 10 };
+const resources = { food: 200, wood: 200, gold: 150, pop: 3, popCap: 10 };
 const HUD = {
   food: document.getElementById('food'),
   wood: document.getElementById('wood'),
@@ -37,8 +39,8 @@ const HUD = {
   selectionDetails: document.getElementById('selection-details'),
 };
 
-const units = []; // villagers + military
-const buildings = []; // TC + production buildings
+const units = []; // villagers only for now
+const buildings = []; // TC only
 const resourcesNodes = []; // trees, bushes, mines
 let selected = null;
 let gatherTargetIndex = 0; // cycles between resource types
@@ -96,8 +98,8 @@ function spawnUnit(kind, position) {
 }
 
 function spawnBuilding(kind, position) {
-  const colorMap = { tc: '#f1c40f', barracks: '#3498db', range: '#e67e22', stable: '#9b59b6' };
-  const geo = new THREE.BoxGeometry(6, 4, 6);
+  const colorMap = { tc: '#f1c40f' };
+  const geo = new THREE.BoxGeometry(8, 4.5, 8);
   const mat = new THREE.MeshStandardMaterial({ color: colorMap[kind] || '#ccc' });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(position);
@@ -134,9 +136,6 @@ function pickNearbyResource(type, fromPos) {
 
 // ---- Initialization ----
 const tc = spawnBuilding('tc', new THREE.Vector3(0, 2, 0));
-spawnBuilding('barracks', new THREE.Vector3(-15, 2, -5));
-spawnBuilding('range', new THREE.Vector3(15, 2, -5));
-spawnBuilding('stable', new THREE.Vector3(0, 2, -18));
 
 spawnUnit('villager', new THREE.Vector3(3, 0.5, 3));
 spawnUnit('villager', new THREE.Vector3(-3, 0.5, 3));
@@ -196,44 +195,7 @@ document.getElementById('assign-gather').addEventListener('click', () => {
   showSelection(selected);
 });
 
-// ---- Production buttons ----
-const productionRules = {
-  villager: { food: 50, wood: 0, gold: 0, building: 'tc' },
-  spearman: { food: 50, wood: 20, gold: 0, building: 'barracks' },
-  archer: { food: 0, wood: 50, gold: 20, building: 'range' },
-  horse: { food: 80, wood: 0, gold: 40, building: 'stable' },
-};
-
-function canAfford(kind) {
-  const cost = productionRules[kind];
-  return resources.food >= cost.food && resources.wood >= cost.wood && resources.gold >= cost.gold;
-}
-
-function payCost(kind) {
-  const cost = productionRules[kind];
-  resources.food -= cost.food;
-  resources.wood -= cost.wood;
-  resources.gold -= cost.gold;
-}
-
-function findBuilding(kind) {
-  return buildings.find(b => b.userData.kind === productionRules[kind].building) || tc;
-}
-
-function spawnAt(kind) {
-  if (!canAfford(kind)) return;
-  if (units.length >= resources.popCap) return;
-  payCost(kind);
-  const b = findBuilding(kind);
-  const spawnPos = b.position.clone().add(new THREE.Vector3( (Math.random()-0.5)*4, 0.5, (Math.random()-0.5)*4 ));
-  spawnUnit(kind, spawnPos);
-  updateHUD();
-}
-
-document.getElementById('make-villager').addEventListener('click', () => spawnAt('villager'));
-document.getElementById('make-spearman').addEventListener('click', () => spawnAt('spearman'));
-document.getElementById('make-archer').addEventListener('click', () => spawnAt('archer'));
-document.getElementById('make-horse').addEventListener('click', () => spawnAt('horse'));
+// ---- Production buttons removed (prototype has only starting units) ----
 
 // ---- Game loop ----
 const clock = new THREE.Clock();
@@ -322,5 +284,8 @@ anime({
   targets: '#hud', translateY: [-80, 0], duration: 800, easing: 'easeOutExpo'
 });
 anime({
-  targets: '#controls', translateY: [100, 0], duration: 800, easing: 'easeOutExpo', delay: 150
+  targets: '#selection', translateY: [80, 0], duration: 800, easing: 'easeOutExpo', delay: 100
+});
+anime({
+  targets: '#minimap', translateY: [80, 0], duration: 800, easing: 'easeOutExpo', delay: 120
 });
