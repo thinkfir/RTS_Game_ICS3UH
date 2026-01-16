@@ -1,291 +1,248 @@
-// RTS prototype using Three.js and anime.js. Undergrad-friendly, commented.
-// Uses CDN globals (THREE, anime) provided in index.html.
+// Stick Wars 2D prototype with p5.js. Undergrad-friendly, clear comments.
 
-// ---- Basic scene setup ----
-const container = document.getElementById('canvas-container');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color('#a9c8df');
+// ---- Game constants ----
+const CANVAS_W = 1200;
+const CANVAS_H = 600;
+const GROUND_Y = 420;
+const PLAYER_X = 120;
+const ENEMY_X = CANVAS_W - 140;
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
-camera.position.set(0, 35, 45);
-camera.lookAt(0, 0, 0);
+// 10 unit archetypes (simplified stats)
+const UNIT_TYPES = [
+  { key: 'worker', name: 'Worker', cost: 40, hp: 20, dmg: 3, spd: 1.4 },
+  { key: 'club', name: 'Clubman', cost: 60, hp: 35, dmg: 6, spd: 1.2 },
+  { key: 'spear', name: 'Spearman', cost: 70, hp: 40, dmg: 7, spd: 1.1 },
+  { key: 'arch', name: 'Archer', cost: 80, hp: 30, dmg: 9, spd: 1.0, range: 140 },
+  { key: 'sword', name: 'Swordsman', cost: 90, hp: 55, dmg: 10, spd: 1.3 },
+  { key: 'heavy', name: 'Heavy', cost: 110, hp: 80, dmg: 12, spd: 0.9 },
+  { key: 'horse', name: 'Horseman', cost: 120, hp: 65, dmg: 11, spd: 1.6 },
+  { key: 'mage', name: 'Mage', cost: 140, hp: 45, dmg: 16, spd: 1.0, range: 120 },
+  { key: 'giant', name: 'Giant', cost: 180, hp: 150, dmg: 24, spd: 0.7 },
+  { key: 'assassin', name: 'Assassin', cost: 130, hp: 40, dmg: 18, spd: 2.0 },
+];
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
-container.appendChild(renderer.domElement);
+// ---- State ----
+let gold = 0;
+let income = 1; // gold per second
+let mineLevel = 1;
+let lastIncomeTime = 0;
+const playerUnits = [];
+const enemyUnits = [];
+let playerBaseHP = 100;
+let enemyBaseHP = 100;
 
-const ambient = new THREE.AmbientLight(0xffffff, 1.0);
-scene.add(ambient);
-const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-dir.position.set(25, 35, 15);
-scene.add(dir);
+// ---- UI elements ----
+const hpPlayerEl = document.getElementById('hp-player');
+const hpEnemyEl = document.getElementById('hp-enemy');
+const goldFillEl = document.getElementById('gold-fill');
+const goldTextEl = document.getElementById('gold-text');
+const incomeEl = document.getElementById('income');
+const mineLevelEl = document.getElementById('mine-level');
+const buttonsEl = document.getElementById('buttons');
+const logEl = document.getElementById('log');
 
-// Ground with mild variation
-const groundGeo = new THREE.PlaneGeometry(160, 160, 1, 1);
-const groundMat = new THREE.MeshStandardMaterial({ color: '#7da67d', roughness: 0.9, metalness: 0.0 });
-const ground = new THREE.Mesh(groundGeo, groundMat);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
-
-// ---- Game state ----
-const resources = { food: 200, wood: 200, gold: 150, pop: 3, popCap: 10 };
-const HUD = {
-  food: document.getElementById('food'),
-  wood: document.getElementById('wood'),
-  gold: document.getElementById('gold'),
-  pop: document.getElementById('pop'),
-  selectionDetails: document.getElementById('selection-details'),
-};
-
-const units = []; // villagers only for now
-const buildings = []; // TC only
-const resourcesNodes = []; // trees, bushes, mines
-let selected = null;
-let gatherTargetIndex = 0; // cycles between resource types
-
-// ---- Helpers ----
-function updateHUD() {
-  HUD.food.textContent = Math.floor(resources.food);
-  HUD.wood.textContent = Math.floor(resources.wood);
-  HUD.gold.textContent = Math.floor(resources.gold);
-  HUD.pop.textContent = `${units.length}/${resources.popCap}`;
+function log(msg) {
+  const p = document.createElement('div');
+  p.textContent = msg;
+  logEl.prepend(p);
 }
 
-function makeMarker(color = '#fff') {
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  const mat = new THREE.MeshStandardMaterial({ color });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  return mesh;
+// ---- p5 setup/draw ----
+let lastTime = 0;
+let sprites = {};
+
+function preload() {
+  // Simple colored rectangles will be drawn; no image assets needed.
 }
 
-function makeResourceNode(type, position) {
-  const colorMap = { food: '#6bbf59', wood: '#8b5a2b', gold: '#d4af37' };
-  const size = 2.3;
-  const geo = new THREE.CylinderGeometry(size, size, 2, 8);
-  const mat = new THREE.MeshStandardMaterial({ color: colorMap[type] || '#888' });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.copy(position);
-  mesh.userData = { type };
-  scene.add(mesh);
-  resourcesNodes.push(mesh);
+function setup() {
+  const c = createCanvas(CANVAS_W, CANVAS_H);
+  c.parent('canvas-holder');
+  frameRate(60);
+  initButtons();
+  lastIncomeTime = millis();
+  log('Welcome to Stick Wars. Train units or invest in mining.');
 }
 
-function spawnUnit(kind, position) {
-  const colorMap = {
-    villager: '#d9e4ff',
-    spearman: '#4da6ff',
-    archer: '#ff6f61',
-    horse: '#8f6af8',
-  };
-  const mesh = makeMarker(colorMap[kind] || '#fff');
-  mesh.scale.set(1, 1.5, 1);
-  mesh.position.copy(position.clone());
-  mesh.userData = {
-    kind,
-    hp: 50,
-    target: null,
-    task: 'idle',
-    gatherType: null,
-    cooldown: 0,
-  };
-  scene.add(mesh);
-  units.push(mesh);
+function draw() {
+  background('#0f172a');
+  drawGround();
+  const now = millis();
+  const dt = (now - lastTime) / 1000 || 0;
+  lastTime = now;
+
+  handleIncome(now);
+  updateUnits(playerUnits, enemyUnits, dt, 1);
+  updateUnits(enemyUnits, playerUnits, dt, -1);
+  resolveCombat(playerUnits, enemyUnits);
+  resolveCombat(enemyUnits, playerUnits);
+  drawBases();
+  drawUnits(playerUnits, '#22c55e');
+  drawUnits(enemyUnits, '#f87171');
   updateHUD();
-  return mesh;
+  checkWin();
 }
 
-function spawnBuilding(kind, position) {
-  const colorMap = { tc: '#f1c40f' };
-  const geo = new THREE.BoxGeometry(8, 4.5, 8);
-  const mat = new THREE.MeshStandardMaterial({ color: colorMap[kind] || '#ccc' });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.copy(position);
-  mesh.userData = { kind };
-  scene.add(mesh);
-  buildings.push(mesh);
-  return mesh;
-}
-
-function animateMove(mesh, targetPos, duration = 1200) {
-  const start = mesh.position.clone();
-  anime({
-    targets: { t: 0 },
-    t: 1,
-    duration,
-    easing: 'easeInOutSine',
-    update: anim => {
-      mesh.position.lerpVectors(start, targetPos, anim.animations[0].currentValue);
-    },
-  });
-}
-
-function pickNearbyResource(type, fromPos) {
-  const candidates = resourcesNodes.filter(n => n.userData.type === type);
-  if (!candidates.length) return null;
-  let best = candidates[0];
-  let bestDist = fromPos.distanceTo(best.position);
-  for (let i = 1; i < candidates.length; i++) {
-    const d = fromPos.distanceTo(candidates[i].position);
-    if (d < bestDist) { best = candidates[i]; bestDist = d; }
+// ---- Income ----
+function handleIncome(now) {
+  if (now - lastIncomeTime > 1000) {
+    gold += income;
+    lastIncomeTime = now;
   }
-  return best;
 }
 
-// ---- Initialization ----
-const tc = spawnBuilding('tc', new THREE.Vector3(0, 2, 0));
+// ---- Units ----
+class Unit {
+  constructor(type, x, facing) {
+    this.type = type;
+    this.x = x;
+    this.y = GROUND_Y - 20;
+    this.hp = type.hp;
+    this.facing = facing; // 1 for player->right, -1 for enemy->left
+    this.range = type.range || 24;
+    this.attackCooldown = 0;
+    this.state = 'advancing';
+  }
+}
 
-spawnUnit('villager', new THREE.Vector3(3, 0.5, 3));
-spawnUnit('villager', new THREE.Vector3(-3, 0.5, 3));
-spawnUnit('villager', new THREE.Vector3(0, 0.5, -3));
-
-// Resource nodes scatter
-makeResourceNode('food', new THREE.Vector3(10, 1, 12));
-makeResourceNode('food', new THREE.Vector3(-12, 1, 10));
-makeResourceNode('wood', new THREE.Vector3(-18, 1, -10));
-makeResourceNode('wood', new THREE.Vector3(18, 1, -12));
-makeResourceNode('gold', new THREE.Vector3(5, 1, -15));
-makeResourceNode('gold', new THREE.Vector3(-10, 1, -18));
-
-updateHUD();
-
-// ---- Selection ----
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-function onClick(event) {
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects([...units, ...buildings]);
-  if (intersects.length > 0) {
-    selected = intersects[0].object;
-    showSelection(selected);
+function spawnUnit(isPlayer, typeKey) {
+  const type = UNIT_TYPES.find(u => u.key === typeKey);
+  if (!type) return;
+  if (isPlayer) {
+    if (gold < type.cost) return log('Not enough gold.');
+    gold -= type.cost;
+    playerUnits.push(new Unit(type, PLAYER_X + 40, 1));
+    log(`Trained ${type.name}.`);
   } else {
-    selected = null;
-    HUD.selectionDetails.textContent = 'None';
+    enemyUnits.push(new Unit(type, ENEMY_X - 40, -1));
   }
 }
-window.addEventListener('click', onClick);
 
-function showSelection(obj) {
-  const kind = obj.userData.kind;
-  if (!kind) {
-    HUD.selectionDetails.textContent = 'Building';
-    return;
-  }
-  const task = obj.userData.task;
-  const gather = obj.userData.gatherType ? ` | gathering: ${obj.userData.gatherType}` : '';
-  HUD.selectionDetails.textContent = `${kind} (${task || 'idle'})${gather}`;
+// ---- AI ----
+function enemyAI() {
+  const roll = random();
+  const tier = enemyUnits.length < 4 ? 0.5 : 0.8;
+  const choices = UNIT_TYPES.filter(u => u.cost <= (tier === 0.5 ? 90 : 150));
+  const pick = random(choices);
+  spawnUnit(false, pick.key);
+}
+setInterval(enemyAI, 2200);
+
+// ---- Mining investment ----
+function investMining() {
+  const cost = 50 * mineLevel;
+  if (gold < cost) return log('Not enough gold to invest.');
+  gold -= cost;
+  mineLevel += 1;
+  income += 0.5;
+  log(`Invested in mining. Income now +${income.toFixed(1)}/s.`);
 }
 
-// ---- Assignment ----
-document.getElementById('assign-gather').addEventListener('click', () => {
-  if (!selected || selected.userData.kind !== 'villager') return;
-  const kinds = ['food', 'wood', 'gold'];
-  const targetType = kinds[gatherTargetIndex % kinds.length];
-  gatherTargetIndex++;
-  const targetNode = pickNearbyResource(targetType, selected.position);
-  if (!targetNode) return;
-  selected.userData.task = 'gather';
-  selected.userData.gatherType = targetType;
-  selected.userData.target = targetNode;
-  animateMove(selected, targetNode.position.clone().add(new THREE.Vector3(0, 0.5, 0)), 1000);
-  showSelection(selected);
-});
-
-// ---- Production buttons removed (prototype has only starting units) ----
-
-// ---- Game loop ----
-const clock = new THREE.Clock();
-
-function tick() {
-  requestAnimationFrame(tick);
-  const dt = clock.getDelta();
-
-  // Villager gathering
-  units.forEach(u => {
-    const data = u.userData;
-    if (data.kind === 'villager' && data.task === 'gather' && data.target) {
-      const dist = u.position.distanceTo(data.target.position);
-      if (dist > 1.8) {
-        const dir = data.target.position.clone().sub(u.position).normalize();
-        u.position.add(dir.multiplyScalar(dt * 6));
-      } else {
-        const rate = 8 * dt; // per second
-        resources[data.gatherType] += rate;
+// ---- Updates ----
+function updateUnits(myUnits, otherUnits, dt, dir) {
+  myUnits.forEach(u => {
+    if (u.hp <= 0) return;
+    // If enemy in range, attack
+    const target = otherUnits.find(o => o.hp > 0 && Math.abs(o.x - u.x) <= u.range);
+    if (target) {
+      u.state = 'fighting';
+      u.attackCooldown -= dt;
+      if (u.attackCooldown <= 0) {
+        target.hp -= u.type.dmg;
+        u.attackCooldown = 0.7;
       }
+    } else {
+      u.state = 'advancing';
+      u.x += u.type.spd * dir;
+    }
+
+    // Attack base if reached
+    if (dir === 1 && u.x >= ENEMY_X) {
+      enemyBaseHP -= u.type.dmg * dt * 0.7;
+    }
+    if (dir === -1 && u.x <= PLAYER_X) {
+      playerBaseHP -= u.type.dmg * dt * 0.7;
     }
   });
 
-  updateHUD();
-  renderer.render(scene, camera);
-  drawMinimap();
+  // Remove dead
+  for (let i = myUnits.length - 1; i >= 0; i--) {
+    if (myUnits[i].hp <= 0) myUnits.splice(i, 1);
+  }
 }
-requestAnimationFrame(tick);
 
-// ---- Minimap ----
-const minimapCanvas = document.getElementById('minimap-canvas');
-const miniCtx = minimapCanvas.getContext('2d');
-const mapSize = 120;
-function worldToMini(vec3) {
-  return {
-    x: (vec3.x / mapSize) * minimapCanvas.width + minimapCanvas.width / 2,
-    y: (vec3.z / mapSize) * minimapCanvas.height + minimapCanvas.height / 2,
-  };
+function resolveCombat(myUnits, otherUnits) {
+  // Already handled in update via attack; here we cleanup dead targets for accuracy
+  for (let i = otherUnits.length - 1; i >= 0; i--) {
+    if (otherUnits[i].hp <= 0) otherUnits.splice(i, 1);
+  }
 }
-function drawMinimap() {
-  miniCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-  miniCtx.fillStyle = '#0b1a2f';
-  miniCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
 
-  // draw resources
-  resourcesNodes.forEach(n => {
-    const p = worldToMini(n.position);
-    const type = n.userData.type;
-    miniCtx.fillStyle = type === 'food' ? '#6bbf59' : type === 'wood' ? '#8b5a2b' : '#d4af37';
-    miniCtx.fillRect(p.x - 3, p.y - 3, 6, 6);
-  });
+// ---- Drawing ----
+function drawGround() {
+  noStroke();
+  fill('#0b1224');
+  rect(0, 0, width, height);
+  fill('#1f2937');
+  rect(0, GROUND_Y, width, height - GROUND_Y);
+  fill('#14b8a6');
+  rect(0, GROUND_Y, width, 6);
+}
 
-  // draw buildings
-  buildings.forEach(b => {
-    const p = worldToMini(b.position);
-    miniCtx.fillStyle = '#f1c40f';
-    miniCtx.fillRect(p.x - 4, p.y - 4, 8, 8);
-  });
+function drawBases() {
+  fill('#22c55e');
+  rect(PLAYER_X - 20, GROUND_Y - 60, 60, 60, 8);
+  fill('#f87171');
+  rect(ENEMY_X - 40, GROUND_Y - 60, 60, 60, 8);
+}
 
-  // draw units
-  units.forEach(u => {
-    const p = worldToMini(u.position);
-    const k = u.userData.kind;
-    miniCtx.fillStyle = k === 'villager' ? '#d9e4ff' : k === 'spearman' ? '#4da6ff' : k === 'archer' ? '#ff6f61' : '#8f6af8';
-    miniCtx.beginPath();
-    miniCtx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    miniCtx.fill();
+function drawUnits(list, color) {
+  list.forEach(u => {
+    const h = map(u.hp, 0, u.type.hp, 10, 30);
+    const w = 12;
+    fill(color);
+    rect(u.x - w/2, u.y - h, w, h, 4);
+    // weapon tip for style
+    stroke(255);
+    strokeWeight(2);
+    line(u.x, u.y - h, u.x + (u.facing*8), u.y - h - 10);
+    noStroke();
   });
 }
 
-drawMinimap();
+// ---- HUD ----
+function updateHUD() {
+  hpPlayerEl.textContent = Math.max(0, playerBaseHP).toFixed(0);
+  hpEnemyEl.textContent = Math.max(0, enemyBaseHP).toFixed(0);
+  goldTextEl.textContent = `Gold: ${Math.floor(gold)}`;
+  goldFillEl.style.width = `${Math.min(100, gold)}%`;
+  incomeEl.textContent = `+${income.toFixed(1)}/s`;
+  mineLevelEl.textContent = mineLevel;
+}
 
-// ---- Resize ----
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+// ---- Win/Lose ----
+function checkWin() {
+  if (enemyBaseHP <= 0) {
+    noLoop();
+    log('You win!');
+  }
+  if (playerBaseHP <= 0) {
+    noLoop();
+    log('You lost.');
+  }
+}
 
-// ---- Simple counter logic note ----
-// Archers > Spearmen, Horsemen > Archers, Spearmen > Horsemen.
-// Not used in combat here; placeholder for UI reference.
-
-// ---- UI animation example ----
-anime({
-  targets: '#hud', translateY: [-80, 0], duration: 800, easing: 'easeOutExpo'
-});
-anime({
-  targets: '#selection', translateY: [80, 0], duration: 800, easing: 'easeOutExpo', delay: 100
-});
-anime({
-  targets: '#minimap', translateY: [80, 0], duration: 800, easing: 'easeOutExpo', delay: 120
-});
+// ---- UI buttons ----
+function initButtons() {
+  buttonsEl.innerHTML = '';
+  UNIT_TYPES.forEach(t => {
+    const btn = document.createElement('button');
+    btn.textContent = `${t.name} (-${t.cost})`;
+    btn.onclick = () => spawnUnit(true, t.key);
+    buttonsEl.appendChild(btn);
+  });
+  const investBtn = document.createElement('button');
+  investBtn.textContent = 'Invest in Mining';
+  investBtn.onclick = investMining;
+  buttonsEl.appendChild(investBtn);
+}
